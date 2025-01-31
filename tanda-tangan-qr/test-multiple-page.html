@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Digital Signature dengan QR - Multiple Pages</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        #pdfContainer {
+            position: relative;
+            border: 1px solid #ccc;
+            margin: 20px 0;
+            min-height: 500px;
+            overflow: hidden;
+        }
+        #qrCode {
+            position: absolute;
+            cursor: move;
+            z-index: 1000;
+            background: white;
+            padding: 5px;
+            border: 1px solid #ccc;
+            user-select: none;
+            touch-action: none;
+        }
+        .control-panel {
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+        }
+        .page-navigation {
+            margin: 10px 0;
+            text-align: center;
+        }
+        .page-info {
+            margin: 0 10px;
+            display: inline-block;
+        }
+        canvas {
+            border: 1px solid #ddd;
+        }
+        #pdfCanvas {
+            max-width: 100%;
+        }
+        .drag-handle {
+            cursor: move;
+            background: #f0f0f0;
+            padding: 5px;
+            margin-bottom: 5px;
+            text-align: center;
+            font-size: 12px;
+        }
+        button {
+            padding: 5px 10px;
+            margin: 0 5px;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="control-panel">
+        <h3>Upload Tanda Tangan dan PDF</h3>
+        <div>
+            <label>Upload Tanda Tangan:</label>
+            <input type="file" id="signatureUpload" accept="image/*">
+        </div>
+        <div>
+            <label>Upload PDF:</label>
+            <input type="file" id="pdfUpload" accept=".pdf">
+        </div>
+        <div>
+            <button id="generateQR">Generate QR Code</button>
+            <button id="downloadPDF">Download PDF</button>
+        </div>
+    </div>
+
+    <div class="page-navigation">
+        <button id="prevPage" disabled>&lt; Previous</button>
+        <span class="page-info">Page <span id="currentPage">1</span> of <span id="totalPages">1</span></span>
+        <button id="nextPage" disabled>Next &gt;</button>
+    </div>
+
+    <div id="pdfContainer">
+        <canvas id="pdfCanvas"></canvas>
+        <div id="qrCode" style="display: none;">
+            <div class="drag-handle">Drag QR Code</div>
+            <div id="qrCodeContent"></div>
+        </div>
+    </div>
+
+    <script>
+        // Inisialisasi PDF.js
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.worker.min.js';
+        
+        let signatureImage = null;
+        let pdfDocument = null;
+        let qrCodeInstance = null;
+        let qrPosition = { x: 0, y: 0 };
+        let originalPdfFile = null;
+        let currentPageNum = 1;
+        let qrPositions = {}; // Menyimpan posisi QR untuk setiap halaman
+
+        // Handle upload tanda tangan
+        document.getElementById('signatureUpload').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    signatureImage = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Handle upload PDF
+        document.getElementById('pdfUpload').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            originalPdfFile = file;
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = async function(event) {
+                    const typedarray = new Uint8Array(event.target.result);
+                    try {
+                        const loadingTask = pdfjsLib.getDocument({data: typedarray});
+                        pdfDocument = await loadingTask.promise;
+                        
+                        // Update total pages
+                        document.getElementById('totalPages').textContent = pdfDocument.numPages;
+                        
+                        // Enable/disable navigation buttons
+                        updateNavigationButtons();
+                        
+                        // Render first page
+                        currentPageNum = 1;
+                        renderPDFPage(currentPageNum);
+                    } catch (error) {
+                        console.error('Error loading PDF:', error);
+                        alert('Error loading PDF file');
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        // Navigation buttons
+        document.getElementById('prevPage').addEventListener('click', () => {
+            if (currentPageNum > 1) {
+                currentPageNum--;
+                renderPDFPage(currentPageNum);
+                updateNavigationButtons();
+                updateQRPosition();
+            }
+        });
+
+        document.getElementById('nextPage').addEventListener('click', () => {
+            if (pdfDocument && currentPageNum < pdfDocument.numPages) {
+                currentPageNum++;
+                renderPDFPage(currentPageNum);
+                updateNavigationButtons();
+                updateQRPosition();
+            }
+        });
+
+        function updateNavigationButtons() {
+            const prevButton = document.getElementById('prevPage');
+            const nextButton = document.getElementById('nextPage');
+            
+            prevButton.disabled = currentPageNum <= 1;
+            nextButton.disabled = !pdfDocument || currentPageNum >= pdfDocument.numPages;
+            
+            document.getElementById('currentPage').textContent = currentPageNum;
+        }
+
+        function updateQRPosition() {
+            const qrElement = document.getElementById('qrCode');
+            if (qrElement && qrPositions[currentPageNum]) {
+                qrElement.style.left = qrPositions[currentPageNum].x + 'px';
+                qrElement.style.top = qrPositions[currentPageNum].y + 'px';
+            }
+        }
+
+        // Render halaman PDF
+        async function renderPDFPage(pageNumber) {
+            try {
+                const page = await pdfDocument.getPage(pageNumber);
+                const canvas = document.getElementById('pdfCanvas');
+                const context = canvas.getContext('2d');
+                
+                const viewport = page.getViewport({scale: 1.5});
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+
+                document.getElementById('pdfContainer').style.height = canvas.height + 'px';
+                
+                const renderContext = {
+                    canvasContext: context,
+                    viewport: viewport
+                };
+                
+                await page.render(renderContext).promise;
+            } catch (error) {
+                console.error('Error rendering PDF:', error);
+                alert('Error displaying PDF');
+            }
+        }
+
+        // Generate QR Code
+        document.getElementById('generateQR').addEventListener('click', function() {
+            const pdfFile = document.getElementById('pdfUpload').files[0];
+            if (!pdfFile || !signatureImage) {
+                alert('Harap upload tanda tangan dan PDF terlebih dahulu');
+                return;
+            }
+
+            try {
+                // Clear previous QR Code
+                const qrCodeContent = document.getElementById('qrCodeContent');
+                qrCodeContent.innerHTML = '';
+
+                // Create simple data for QR
+                const qrData = pdfFile.name + "_" + new Date().toISOString();
+
+                // Generate new QR Code
+                qrCodeInstance = new QRCode(qrCodeContent, {
+                    text: qrData,
+                    width: 100,
+                    height: 100
+                });
+
+                // Show QR Code container
+                const qrContainer = document.getElementById('qrCode');
+                qrContainer.style.display = 'block';
+                
+                // Set initial position if not set for current page
+                if (!qrPositions[currentPageNum]) {
+                    qrPositions[currentPageNum] = { x: 50, y: 50 };
+                }
+                
+                qrContainer.style.left = qrPositions[currentPageNum].x + 'px';
+                qrContainer.style.top = qrPositions[currentPageNum].y + 'px';
+                
+            } catch (error) {
+                console.error('Error generating QR:', error);
+                alert('Error generating QR Code: ' + error.message);
+            }
+        });
+
+        // Download PDF with QR
+        document.getElementById('downloadPDF').addEventListener('click', async function() {
+            if (!qrCodeInstance) {
+                alert('Harap generate QR Code terlebih dahulu');
+                return;
+            }
+
+            try {
+                const pdf = new jspdf.jsPDF();
+                let currentPage = 1;
+                
+                while (currentPage <= pdfDocument.numPages) {
+                    // Render page to canvas
+                    const page = await pdfDocument.getPage(currentPage);
+                    const viewport = page.getViewport({scale: 1.5});
+                    
+                    const canvas = document.createElement('canvas');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    
+                    const context = canvas.getContext('2d');
+                    await page.render({
+                        canvasContext: context,
+                        viewport: viewport
+                    }).promise;
+                    
+                    // If page has QR position, add QR to it
+                    if (qrPositions[currentPage]) {
+                        const qrCanvas = document.querySelector('#qrCodeContent canvas');
+                        context.drawImage(qrCanvas, 
+                            qrPositions[currentPage].x, 
+                            qrPositions[currentPage].y);
+                    }
+                    
+                    // Add page to PDF
+                    if (currentPage > 1) {
+                        pdf.addPage();
+                    }
+                    pdf.addImage(canvas.toDataURL('image/jpeg'), 'JPEG', 0, 0, 
+                        pdf.internal.pageSize.getWidth(), 
+                        pdf.internal.pageSize.getHeight());
+                    
+                    currentPage++;
+                }
+                
+                pdf.save('signed_document_multipage.pdf');
+
+            } catch (error) {
+                console.error('Error downloading PDF:', error);
+                alert('Error downloading PDF: ' + error.message);
+            }
+        });
+
+        // Make QR Code draggable
+        const qrElement = document.getElementById('qrCode');
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+        let xOffset = 0;
+        let yOffset = 0;
+
+        qrElement.addEventListener('mousedown', dragStart);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', dragEnd);
+
+        function dragStart(e) {
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+
+            if (e.target === qrElement || e.target.parentNode === qrElement) {
+                isDragging = true;
+            }
+        }
+
+        function drag(e) {
+            if (isDragging) {
+                e.preventDefault();
+
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+
+                xOffset = currentX;
+                yOffset = currentY;
+
+                const container = document.getElementById('pdfContainer');
+                const containerRect = container.getBoundingClientRect();
+                const qrRect = qrElement.getBoundingClientRect();
+
+                if (currentX >= 0 && currentX <= containerRect.width - qrRect.width) {
+                    qrElement.style.left = currentX + 'px';
+                    // Save position for current page
+                    qrPositions[currentPageNum] = {
+                        ...qrPositions[currentPageNum],
+                        x: currentX
+                    };
+                }
+                
+                if (currentY >= 0 && currentY <= containerRect.height - qrRect.height) {
+                    qrElement.style.top = currentY + 'px';
+                    // Save position for current page
+                    qrPositions[currentPageNum] = {
+                        ...qrPositions[currentPageNum],
+                        y: currentY
+                    };
+                }
+            }
+        }
+
+        function dragEnd() {
+            initialX = currentX;
+            initialY = currentY;
+            isDragging = false;
+        }
+
+        // Touch events
+        qrElement.addEventListener('touchstart', dragStart);
+        document.addEventListener('touchmove', drag);
+        document.addEventListener('touchend', dragEnd);
+
+        function dragStart(e) {
+            if (e.type === 'touchstart') {
+                initialX = e.touches[0].clientX - xOffset;
+                initialY = e.touches[0].clientY - yOffset;
+            } else {
+                initialX = e.clientX - xOffset;
+                initialY = e.clientY - yOffset;
+            }
+
+            if (e.target === qrElement || e.target.parentNode === qrElement) {
+                isDragging = true;
+            }
+        }
+
+        function drag(e) {
+            if (isDragging) {
+                e.preventDefault();
+
+                if (e.type === 'touchmove') {
+                    currentX = e.touches[0].clientX - initialX;
+                    currentY = e.touches[0].clientY - initialY;
+                } else {
+                    currentX = e.clientX - initialX;
+                    currentY = e.clientY - initialY;
+                }
+
+                xOffset = currentX;
+                yOffset = currentY;
+
+                const container = document.getElementById('pdfContainer');
+                const containerRect = container.getBoundingClientRect();
+                const qrRect = qrElement.getBoundingClientRect();
+
+                if (currentX >= 0 && currentX <= containerRect.width - qrRect.width) {
+                    qrElement.style.left = currentX + 'px';
+                    qrPositions[currentPageNum] = {
+                        ...qrPositions[currentPageNum],
+                        x: currentX
+                    };
+                }
+                
+                if (currentY >= 0 && currentY <= containerRect.height - qrRect.height) {
+                    qrElement.style.top = currentY + 'px';
+                    qrPositions[currentPageNum] = {
+                        ...qrPositions[currentPageNum],
+                        y: currentY
+                    };
+                }
+            }
+        }
+    </script>
+</body>
+</html>
