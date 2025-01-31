@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Map Batas Wilayah Desa Kaputihan</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol/ol.css" />
+  <style>
+    #map {
+      height: 400px;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <h2>Map Batas Wilayah Desa Kaputihan Tasikmalaya</h2>
+  <div id="map"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/ol/ol.js"></script>
+  <script>
+    // Inisialisasi map
+    const map = new ol.Map({
+      target: 'map',
+      layers: [
+        new ol.layer.Tile({
+          source: new ol.source.OSM()
+        })
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([108.208275, -7.368540]), // Koordinat Kaputihan Tasikmalaya
+        zoom: 14
+      })
+    });
+
+    // Koordinat batas wilayah desa Kaputihan
+    const boundaryCoords = [
+      [108.208275, -7.368540],
+      [108.210100, -7.370020],
+      [108.211700, -7.369800],
+      [108.208275, -7.368540]
+    ];
+
+    // Ubah koordinat ke proyeksi EPSG:3857
+    const boundaryCoordsProjected = boundaryCoords.map(coord => ol.proj.fromLonLat(coord));
+
+    // Buat fitur poligon
+    const boundaryPolygon = new ol.Feature({
+      geometry: new ol.geom.Polygon([boundaryCoordsProjected])
+    });
+
+    // Gaya poligon
+    boundaryPolygon.setStyle(new ol.style.Style({
+      stroke: new ol.style.Stroke({
+        color: 'blue',
+        width: 2
+      }),
+      fill: new ol.style.Fill({
+        color: 'rgba(0, 0, 255, 0.1)'
+      })
+    }));
+
+    // Tambahkan poligon ke layer vector
+    const vectorSource = new ol.source.Vector({
+      features: [boundaryPolygon]
+    });
+
+    const vectorLayer = new ol.layer.Vector({
+      source: vectorSource
+    });
+
+    map.addLayer(vectorLayer);
+  </script>
+</body>
+</html>
